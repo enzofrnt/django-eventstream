@@ -1,6 +1,11 @@
 import copy
 import json
 import logging
+import tempfile
+import portalocker
+from django.conf import settings
+from pathlib import Path
+from django.conf import settings
 from django.core.serializers.json import DjangoJSONEncoder
 from .storage import EventDoesNotExist
 from .eventresponse import EventResponse
@@ -11,7 +16,6 @@ from .utils import (
     get_storage,
     get_channelmanager,
 )
-from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +40,37 @@ if hasattr(settings, "EVENTSTREAM_REDIS"):
 
     redis_client = redis.Redis(**settings.EVENTSTREAM_REDIS)
 
+
+class FileBasedIPC:
+    def __init__(self):
+        self.events_file = Path(tempfile.gettempdir()) / 'django_eventstream_events'
+        self.lock_file = Path(tempfile.gettempdir()) / 'django_eventstream_lock'
+        
+        # Créer les fichiers s'ils n'existent pas
+        self.events_file.touch()
+        self.lock_file.touch()
+    
+    def write_event(self, event_data):
+        # Utilisation de portalocker pour un verrouillage cross-platform
+        with portalocker.Lock(self.lock_file, 'r+') as _:
+            with open(self.events_file, 'a', encoding='utf-8') as f:
+                portalocker.lock(f, portalocker.LOCK_EX)
+                f.write(json.dumps(event_data) + '\n')
+                portalocker.unlock(f)
+    
+    def read_events(self):
+        events = []
+        with portalocker.Lock(self.lock_file, 'r+') as _:
+            with open(self.events_file, 'r+', encoding='utf-8') as f:
+                portalocker.lock(f, portalocker.LOCK_EX)
+                events = f.readlines()
+                f.truncate(0)
+                portalocker.unlock(f)
+        
+        return [json.loads(e.strip()) for e in events]
+
+# Initialiser l'IPC au niveau du module
+file_ipc = FileBasedIPC()
 
 def send_event(
     channel, event_type, data, skip_user_ids=None, async_publish=True, json_encode=True
@@ -69,8 +104,14 @@ def send_event(
             "data": data,
         }
         redis_client.publish("events_channel", json.dumps(redis_message))
+    elif not hasattr(settings, "EVENTSTREAM_ON_MULTIPROCESS") or settings.EVENTSTREAM_ON_MULTIPROCESS:
+        event_message = {
+            "channel": channel,
+            "event_type": event_type,  
+            "data": data,
+        }
+        file_ipc.write_event(event_message)
     else:
-        # Send to local listeners
         get_listener_manager().add_to_queues(channel, e)
 
     # Publish through grip proxy

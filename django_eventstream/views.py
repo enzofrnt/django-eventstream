@@ -65,34 +65,79 @@ class RedisListener(object):
         await self.listen()
 
 
+class FileBasedEventListener:
+    def __init__(self):
+        from .eventstream import file_ipc
+        self.file_ipc = file_ipc
+        self.running = False
+
+    async def poll_events(self):
+        while self.running:
+            events = self.file_ipc.read_events()
+            for event_data in events:
+                channel = event_data["channel"]
+                event_type = event_data["event_type"]
+                data = event_data["data"]
+
+                from .event import Event
+                e = Event(channel, event_type, data)
+                
+                # Notifier les listeners locaux
+                get_listener_manager().add_to_queues(channel, e)
+            
+            # Attendre un court instant avant la prochaine vérification
+            await asyncio.sleep(0.1)
+
+    async def start(self):
+        self.running = True
+        await self.poll_events()
+
+    def stop(self):
+        self.running = False
+
+
 class ListenerManager(object):
     def __init__(self):
         self.lock = threading.Lock()
         self.listeners_by_channel = {}
         self.redis_listener = None
         self.redis_listener_started = False
+        self.file_listener = None
+        self.file_listener_started = False
+
+        # Initialiser Redis si configuré
         if hasattr(settings, "EVENTSTREAM_REDIS"):
             self.redis_listener = RedisListener()
+        elif not hasattr(settings, "EVENTSTREAM_ON_MULTIPROCESS") or settings.EVENTSTREAM_ON_MULTIPROCESS:
+            # Utiliser le FileBasedEventListener par défaut
+            self.file_listener = FileBasedEventListener()
 
     async def start_redis_listener(self):
         await self.redis_listener.start()
 
+    async def start_file_listener(self):
+        await self.file_listener.start()
+
     def add_listener(self, listener):
         logger.info(f"added listener {id(listener)}")
-        if self.redis_listener:
-            loop = asyncio.get_event_loop()
-            with self.lock:
-                if not self.redis_listener_started:
-                    loop.create_task(self.start_redis_listener())
-                    self.redis_listener_started = True
+
 
         with self.lock:
-            for channel in listener.channels:
-                clisteners = self.listeners_by_channel.get(channel)
-                if clisteners is None:
-                    clisteners = set()
-                    self.listeners_by_channel[channel] = clisteners
-                clisteners.add(listener)
+            if self.redis_listener or self.file_listener:
+                loop = asyncio.get_event_loop()
+                if self.redis_listener and not self.redis_listener_started:
+                    loop.create_task(self.start_redis_listener())
+                    self.redis_listener_started = True
+                elif self.file_listener and not self.file_listener_started:
+                    loop.create_task(self.start_file_listener())
+                    self.file_listener_started = True
+            else:
+                for channel in listener.channels:
+                    clisteners = self.listeners_by_channel.get(channel)
+                    if clisteners is None:
+                        clisteners = set()
+                        self.listeners_by_channel[channel] = clisteners
+                    clisteners.add(listener)
 
     def remove_listener(self, listener):
         with self.lock:
