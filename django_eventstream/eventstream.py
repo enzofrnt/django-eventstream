@@ -5,7 +5,6 @@ import tempfile
 import portalocker
 from django.conf import settings
 from pathlib import Path
-from django.conf import settings
 from django.core.serializers.json import DjangoJSONEncoder
 from .storage import EventDoesNotExist
 from .eventresponse import EventResponse
@@ -77,6 +76,7 @@ def send_event(
 ):
     from .event import Event
     from .views import get_listener_manager
+    import asyncio
 
     if json_encode:
         data = json.dumps(data, cls=DjangoJSONEncoder)
@@ -96,23 +96,12 @@ def send_event(
         pub_id = None
         pub_prev_id = None
 
-    # Publish event to Redis Pub/Sub if enabled
-    if redis_client:
-        redis_message = {
-            "channel": channel,
-            "event_type": event_type,
-            "data": data,
-        }
-        redis_client.publish("events_channel", json.dumps(redis_message))
-    elif not hasattr(settings, "EVENTSTREAM_ON_MULTIPROCESS") or settings.EVENTSTREAM_ON_MULTIPROCESS:
-        event_message = {
-            "channel": channel,
-            "event_type": event_type,  
-            "data": data,
-        }
-        file_ipc.write_event(event_message)
-    else:
-        get_listener_manager().add_to_queues(channel, e)
+    # Envoyer l'événement via le listener
+    try:
+        # Envoyer directement l'événement sans utiliser run_until_complete
+        get_listener_manager().send_event(channel, event_type, data)
+    except Exception as e:
+        logger.error(f"Erreur lors de l'envoi de l'événement: {e}")
 
     # Publish through grip proxy
     publish_event(
