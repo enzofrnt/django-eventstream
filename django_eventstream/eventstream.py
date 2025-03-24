@@ -77,7 +77,7 @@ def send_event(
     from .event import Event
     from .views import get_listener_manager
     import asyncio
-
+    
     if json_encode:
         data = json.dumps(data, cls=DjangoJSONEncoder)
 
@@ -96,23 +96,34 @@ def send_event(
         pub_id = None
         pub_prev_id = None
 
-    # Envoyer l'événement via le listener
+    # Vérifier si nous sommes dans un contexte Grip
+    from django.http import HttpRequest
+    from .eventrequest import EventRequest
     try:
-        # Envoyer directement l'événement sans utiliser run_until_complete
-        get_listener_manager().send_event(channel, event_type, data)
-    except Exception as e:
-        logger.error(f"Erreur lors de l'envoi de l'événement: {e}")
+        request = HttpRequest()
+        event_request = EventRequest(request)
+        is_grip = hasattr(request, "grip") and request.grip.proxied
+    except:
+        is_grip = False
 
-    # Publish through grip proxy
-    publish_event(
-        channel,
-        event_type,
-        data,
-        pub_id,
-        pub_prev_id,
-        skip_user_ids=skip_user_ids,
-        blocking=(not async_publish),
-    )
+    # Envoyer l'événement via le listener ou Grip selon le contexte
+    if is_grip:
+        # Si nous sommes dans un contexte Grip, utiliser publish_event
+        publish_event(
+            channel,
+            event_type,
+            data,
+            pub_id,
+            pub_prev_id,
+            skip_user_ids=skip_user_ids,
+            blocking=(not async_publish),
+        )
+    else:
+        # Sinon, utiliser le listener système
+        try:
+            get_listener_manager().send_event(channel, event_type, data)
+        except Exception as e:
+            logger.error(f"Erreur lors de l'envoi de l'événement: {e}")
 
 
 def get_events(request, limit=100, user=None):
