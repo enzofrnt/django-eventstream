@@ -5,12 +5,15 @@ import asyncio
 import copy
 import logging
 import threading
+from typing import Type
+
 from asgiref.sync import sync_to_async
-from django.http import HttpResponseBadRequest, StreamingHttpResponse
-from .utils import add_default_headers
 from django.conf import settings
-from .listeners import FileSystemListener
+from django.http import HttpResponseBadRequest, StreamingHttpResponse
+
 from .event import Event
+from .listeners import BaseEventListener, FileSystemListener
+from .utils import add_default_headers
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +43,9 @@ class SSEClient(object):
 
     async def process_event(self, channel, event_type, data):
         """Traite un événement reçu."""
-        logger.info(f"SSEClient {id(self)}.process_event: Traitement de l'événement {event_type} sur le canal {channel}")
+        logger.info(
+            f"SSEClient {id(self)}.process_event: Traitement de l'événement {event_type} sur le canal {channel}"
+        )
         e = Event(channel, event_type, data)
         items = self.channel_items.get(channel)
         if items is None:
@@ -48,10 +53,14 @@ class SSEClient(object):
             self.channel_items[channel] = items
         if len(items) < MAX_PENDING:
             items.append(e)
-            logger.info(f"SSEClient {id(self)}.process_event: Événement ajouté à la file d'attente")
+            logger.info(
+                f"SSEClient {id(self)}.process_event: Événement ajouté à la file d'attente"
+            )
             self.wake_threadsafe()
         else:
-            logger.warning(f"SSEClient {id(self)}.process_event: File d'attente pleine, overflow activé")
+            logger.warning(
+                f"SSEClient {id(self)}.process_event: File d'attente pleine, overflow activé"
+            )
             self.overflow = True
 
 
@@ -64,36 +73,62 @@ class ListenerManager(object):
         self.sse_clients = set()  # Ensemble des clients SSE connectés
         logger.info("ListenerManager initialisé")
         # Initialiser le listener système au démarrage
-        self.event_listener = self.get_event_listener()
+        self.listener_class = self.get_event_listener_class()
+        self.event_listener = self.listener_class()
+        # self.is_grip = self
         logger.info("ListenerManager: Listener système initialisé")
 
-    def get_event_listener(self):
+    def get_event_listener(self) -> BaseEventListener:
+        return self.event_listener
+
+    def get_event_listener_class(self) -> Type[BaseEventListener]:
         """Sélectionne le listener approprié en fonction de la configuration."""
         if hasattr(settings, "EVENTSTREAM_LISTENER_CLASS"):
             try:
                 # Import dynamique de la classe à partir du chemin complet
-                module_path, class_name = settings.EVENTSTREAM_LISTENER_CLASS.rsplit('.', 1)
+                module_path, class_name = settings.EVENTSTREAM_LISTENER_CLASS.rsplit(
+                    ".", 1
+                )
                 module = __import__(module_path, fromlist=[class_name])
                 listener_class = getattr(module, class_name)
-                logger.info(f"ListenerManager: Utilisation du listener configuré: {class_name}")
-                return listener_class()
+                logger.info(
+                    f"ListenerManager: Utilisation du listener configuré: {class_name}"
+                )
+                return listener_class
             except (ImportError, AttributeError) as e:
-                logger.error(f"ListenerManager: Erreur lors de l'import du listener: {e} \n Utilisation du listener par défaut")
-                return FileSystemListener()
+                logger.error(
+                    f"ListenerManager: Erreur lors de l'import du listener: {e} \n Utilisation du listener par défaut"
+                )
+                return FileSystemListener
         logger.info("ListenerManager: Utilisation du FileSystemListener par défaut")
-        return FileSystemListener()
+        return FileSystemListener
 
     async def start_listener(self):
         """Démarre le listener sélectionné."""
         if self.event_listener and not self.listener_started:
             logger.info("ListenerManager: Démarrage du listener système")
-            await self.event_listener.start()
-            self.listener_started = True
-            logger.info("ListenerManager: Listener système démarré")
+            try:
+                # Créer une nouvelle boucle d'événements si nécessaire
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                # Démarrer le listener dans la boucle d'événements
+                await self.event_listener.start()
+                self.listener_started = True
+                logger.info("ListenerManager: Listener système démarré")
+            except Exception as e:
+                logger.error(
+                    f"ListenerManager: Erreur lors du démarrage du listener: {e}"
+                )
+                self.listener_started = False
+                raise
 
     def add_sse_client(self, client):
         """Ajoute un nouveau client SSE."""
-        logger.info(f"ListenerManager: Ajout du client SSE {id(client)}")
+        logger.info(f"ListenerManager.add_sse_client: Ajout du client SSE {id(client)}")
         with self.lock:
             self.sse_clients.add(client)
             # Démarrer le listener si ce n'est pas déjà fait
@@ -102,7 +137,9 @@ class ListenerManager(object):
                 loop.create_task(self.start_listener())
 
             for channel in client.channels:
-                logger.info(f"ListenerManager: Inscription du client {id(client)} au canal {channel}")
+                logger.info(
+                    f"ListenerManager.add_sse_client: Inscription du client {id(client)} au canal {channel}"
+                )
                 clisteners = self.listeners_by_channel.get(channel)
                 if clisteners is None:
                     clisteners = set()
@@ -119,58 +156,49 @@ class ListenerManager(object):
                 clisteners.remove(client)
                 if len(clisteners) == 0:
                     del self.listeners_by_channel[channel]
-                    logger.info(f"ListenerManager: Suppression du canal {channel} (plus de clients)")
+                    logger.info(
+                        f"ListenerManager: Suppression du canal {channel} (plus de clients)"
+                    )
 
     def send_event(self, channel, event_type, data):
         """Gère l'envoi des événements en fonction du listener utilisé."""
-        logger.info(f"ListenerManager.send_event: Envoi de l'événement {event_type} sur le canal {channel}")
         if self.event_listener:
-            # Utiliser la même configuration que get_event_listener
-            if hasattr(settings, "EVENTSTREAM_LISTENER_CLASS"):
-                try:
-                    module_path, class_name = settings.EVENTSTREAM_LISTENER_CLASS.rsplit('.', 1)
-                    module = __import__(module_path, fromlist=[class_name])
-                    listener_class = getattr(module, class_name)
-                    
-                    # Utiliser la méthode send_event du listener
-                    logger.info(f"ListenerManager.send_event: Utilisation du listener {class_name}")
-                    self.event_listener.send_event(channel, event_type, data)
-                except (ImportError, AttributeError) as e:
-                    logger.error(f"ListenerManager.send_event: Erreur lors de l'envoi d'événement: {e}")
-                    # Fallback vers le comportement par défaut
-                    logger.info("ListenerManager.send_event: Utilisation du FileSystemListener par défaut")
-                    self.event_listener.send_event(channel, event_type, data)
-            else:
-                # Comportement par défaut avec FileSystemListener
-                logger.info("ListenerManager.send_event: Utilisation du FileSystemListener par défaut")
-                self.event_listener.send_event(channel, event_type, data)
+            self.event_listener.send_event(channel, event_type, data)
         else:
-            # Si aucun listener n'est configuré, envoyer directement aux clients
-            logger.info("ListenerManager.send_event: Aucun listener configuré, envoi direct aux clients")
-            e = Event(channel, event_type, data)
-            self.add_to_queues(channel, e)
+            logger.error("ListenerManager.send_event: Aucun listener configuré")
+            raise Exception("Aucun listener configuré")
 
     def add_to_queues(self, channel, event):
         """Ajoute un événement aux files d'attente des clients SSE."""
-        logger.info(f"ListenerManager.add_to_queues: Ajout de l'événement {event.type} sur le canal {channel}")
+        logger.info(
+            f"ListenerManager.add_to_queues: Ajout de l'événement {event.type} sur le canal {channel}"
+        )
         with self.lock:
             wake = []
             clients = self.listeners_by_channel.get(channel, set())
-            logger.info(f"ListenerManager.add_to_queues: {len(clients)} clients trouvés pour le canal {channel}")
+            logger.info(
+                f"ListenerManager.add_to_queues: {len(clients)} clients trouvés pour le canal {channel}"
+            )
             for client in clients:
                 items = client.channel_items.get(channel)
                 if items is None:
                     items = []
                     client.channel_items[channel] = items
                 if len(items) < MAX_PENDING:
-                    logger.info(f"ListenerManager.add_to_queues: Événement ajouté pour le client {id(client)}")
+                    logger.info(
+                        f"ListenerManager.add_to_queues: Événement ajouté pour le client {id(client)}"
+                    )
                     items.append(event)
                     wake.append(client)
                 else:
-                    logger.warning(f"ListenerManager.add_to_queues: File d'attente pleine pour le client {id(client)}")
+                    logger.warning(
+                        f"ListenerManager.add_to_queues: File d'attente pleine pour le client {id(client)}"
+                    )
                     client.overflow = True
             for client in wake:
-                logger.info(f"ListenerManager.add_to_queues: Réveil du client {id(client)}")
+                logger.info(
+                    f"ListenerManager.add_to_queues: Réveil du client {id(client)}"
+                )
                 client.wake_threadsafe()
 
     def kick(self, user_id, channel):
@@ -200,8 +228,8 @@ def get_listener_manager():
 
 
 async def stream(event_request, client):
-    from .eventstream import get_events, EventPermissionError
-    from .utils import sse_encode_event, sse_encode_error, make_id
+    from .eventstream import EventPermissionError, get_events
+    from .utils import make_id, sse_encode_error, sse_encode_event
 
     get_events = sync_to_async(get_events)
 
