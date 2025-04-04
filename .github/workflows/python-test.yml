@@ -37,7 +37,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install ./ && pip install pytest channels
+          pip install ./ && pip install pytest channels daphne
 
       - name: Run pytest
         run: |
