@@ -52,7 +52,7 @@ DATABASES = {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": "test_db.sqlite3",
         "TEST": {
-            "NAME": "test_db.sqlite3",  # Nom du fichier pour les tests
+            "NAME": "test_db.sqlite3",
         },
     }
 }
@@ -61,6 +61,5 @@ STATIC_URL = "/static/"
 
 SECRET_KEY = "test-key"
 
-# EVENTSTREAM_LISTENER_CLASS = "django_eventstream.listeners.RedisListener"
-# EVENTSTREAM_LISTENER_CLASS = 'django_eventstream.listeners.FileSystemListener'
-# EVENTSTREAM_LISTENER_CLASS = 'django_eventstream.listeners.InProcessListener'
+LOGGING_CONFIG = None
+LOGGING = {}

@@ -12,6 +12,9 @@ import requests
 from channels.testing import ChannelsLiveServerTestCase
 from django.urls import reverse
 
+from django_eventstream import send_event
+from django_eventstream.event import Event
+
 
 class BaseTest(ChannelsLiveServerTestCase, ABC):
     """Classe de base abstraite pour les tests. Les tests de cette classe ne seront pas exécutés."""
@@ -88,7 +91,6 @@ class BaseTest(ChannelsLiveServerTestCase, ABC):
                     if isinstance(data_dict, dict)
                     else self.channel
                 )
-                from django_eventstream.event import Event
 
                 event = Event(
                     channel=channel,
@@ -127,8 +129,6 @@ class BaseTest(ChannelsLiveServerTestCase, ABC):
             time.sleep(2)  # Attendre que le client soit prêt
             for event in event_to_send:
                 print(f"Envoi de l'événement: {event}")
-                from django_eventstream import send_event
-
                 send_event(event["channel"], event["event_type"], event["data"])
                 time.sleep(0.1)  # Petit délai entre les événements
 

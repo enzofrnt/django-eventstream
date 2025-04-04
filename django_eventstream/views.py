@@ -220,11 +220,11 @@ class ListenerManager(object):
                 client.wake_threadsafe()
 
 
-listener_manager = ListenerManager()
-
-
 def get_listener_manager():
-    return listener_manager
+    """Retourne une instance du ListenerManager."""
+    if not hasattr(get_listener_manager, "_instance"):
+        get_listener_manager._instance = ListenerManager()
+    return get_listener_manager._instance
 
 
 async def stream(event_request, client):
