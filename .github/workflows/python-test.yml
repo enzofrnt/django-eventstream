@@ -37,7 +37,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install ./ && pip install pytest
+          pip install ./ && pip install pytest channels
 
       - name: Run pytest
         run: |
