@@ -37,7 +37,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install ./ && pip install pytest channels daphne
+          pip install ./ && pip install pytest channels daphne portalocker
 
       - name: Run pytest
         run: |
