@@ -42,7 +42,3 @@ jobs:
       - name: Run pytest
         run: |
           pytest
-
-      - name: Stop on failure
-        if: failure()
-        run: exit 1
