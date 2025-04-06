@@ -39,6 +39,11 @@ jobs:
         run: |
           pip install ./ && pip install pytest channels daphne portalocker
 
+
+      - name: freeze
+        run: |
+          pip freeze
+
       - name: Run pytest
         run: |
           pytest
