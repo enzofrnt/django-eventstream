@@ -37,7 +37,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install ./ && pip install pytest channels daphne portalocker
+          pip install django_eventstream && pip install pytest && pip install -e ./
 
 
       - name: freeze
